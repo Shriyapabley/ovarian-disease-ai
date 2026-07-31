@@ -1,0 +1,1 @@
+{"detail":"Failed to generate report: 500: reportlab is required to generate PDF reports. Install with `pip install reportlab`"}
