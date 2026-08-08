@@ -4,12 +4,18 @@ import type {
   DashboardStats,
   Prediction,
 } from './types';
-import { getDiseaseInfo } from './diseaseData';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
+function getApiBaseUrl() {
+  if (API_BASE_URL && API_BASE_URL.trim().length > 0) {
+    return API_BASE_URL.replace(/\/$/, '');
+  }
+  return typeof window !== 'undefined' ? window.location.origin : '';
+}
+
 async function fetchJson<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, options);
+  const response = await fetch(`${getApiBaseUrl()}${endpoint}`, options);
   if (!response.ok) {
     throw new Error(`API error: ${response.status}`);
   }
@@ -29,14 +35,10 @@ async function fetchWithFallback<T>(
 }
 
 export async function assessImageQuality(imageFile: File): Promise<QualityAssessment> {
-  return fetchWithFallback(
-    '/api/quality-assessment',
-    {
-      method: 'POST',
-      body: createImageFormData(imageFile),
-    },
-    async () => simulateQualityAssessment(imageFile)
-  );
+  return fetchJson<QualityAssessment>('/api/quality-assessment', {
+    method: 'POST',
+    body: createImageFormData(imageFile),
+  });
 }
 
 function createImageFormData(imageFile: File): FormData {
@@ -45,36 +47,15 @@ function createImageFormData(imageFile: File): FormData {
   return formData;
 }
 
-function simulateQualityAssessment(_imageFile: File): Promise<QualityAssessment> {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      const score = 75 + Math.random() * 22;
-      resolve({
-        quality_score: Math.round(score * 10) / 10,
-        quality_assessment: score >= 70 ? 'Good quality' : 'Poor quality',
-        is_sufficient: score >= 70,
-        recommendations:
-          score >= 70
-            ? 'Image quality is sufficient for AI analysis.'
-            : 'Image quality is insufficient. Please upload a clearer, higher-resolution ultrasound scan with better contrast.',
-      });
-    }, 1500);
-  });
-}
-
 export async function runPrediction(
   imageFile: File,
   _patientInfo: Record<string, unknown>,
   modelUsed: string
 ): Promise<PredictionResult> {
-  return fetchWithFallback(
-    '/api/predict',
-    {
-      method: 'POST',
-      body: createPredictionFormData(imageFile, modelUsed),
-    },
-    async () => simulatePrediction(imageFile, modelUsed)
-  );
+  return fetchJson<PredictionResult>('/api/predict', {
+    method: 'POST',
+    body: createPredictionFormData(imageFile, modelUsed),
+  });
 }
 
 function mapModelToBackendId(modelUsed: string): string {
@@ -94,55 +75,6 @@ function createPredictionFormData(imageFile: File, modelUsed: string): FormData 
   formData.append('task', 'cysts');
   formData.append('model', mapModelToBackendId(modelUsed));
   return formData;
-}
-
-function simulatePrediction(_imageFile: File, modelUsed: string): Promise<PredictionResult> {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      const diseases = ['Normal', 'PCOS', 'Ovarian Cyst', 'Endometriosis'];
-      const weights = [0.25, 0.3, 0.3, 0.15];
-      const random = Math.random();
-      let cumulative = 0;
-      let selectedDisease = diseases[0];
-      for (let i = 0; i < diseases.length; i++) {
-        cumulative += weights[i];
-        if (random < cumulative) {
-          selectedDisease = diseases[i];
-          break;
-        }
-      }
-
-      const confidence = 82 + Math.random() * 16;
-      const probability = confidence / 100;
-      const ovaries = ['Left Ovary', 'Right Ovary', 'Both Ovaries'];
-      const affectedOvary =
-        selectedDisease === 'Normal'
-          ? 'None'
-          : ovaries[Math.floor(Math.random() * (selectedDisease === 'PCOS' ? 3 : 2))];
-      const severities = ['Mild', 'Moderate', 'Severe'];
-      const severity =
-        selectedDisease === 'Normal'
-          ? 'Normal'
-          : severities[Math.floor(Math.random() * 3)];
-      const processingTime = 1200 + Math.floor(Math.random() * 2800);
-      const diseaseInfo = getDiseaseInfo(selectedDisease);
-
-      resolve({
-        predicted_disease: selectedDisease,
-        confidence_score: Math.round(confidence * 10) / 10,
-        prediction_probability: Math.round(probability * 1000) / 1000,
-        affected_ovary: affectedOvary,
-        severity_level: severity,
-        processing_time_ms: processingTime,
-        model_used: modelUsed,
-        clinical_interpretation: diseaseInfo.summary,
-        heatmap_url: '',
-        quality_assessment: 'Good quality',
-        quality_score: 88.5,
-        disease_info: diseaseInfo,
-      });
-    }, 100);
-  });
 }
 
 export async function getDashboardStats(): Promise<DashboardStats> {

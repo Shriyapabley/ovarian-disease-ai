@@ -11,6 +11,7 @@ import requests
 
 import numpy as np
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from PIL import Image
 from fastapi.responses import FileResponse
@@ -21,6 +22,7 @@ except Exception:  # pragma: no cover - optional dependency fallback
     torch = None
 
 from .config import MODELS_DIR, TASK_CONFIG, KERAS_MODELS_DIR, KERAS_MODEL_FILES
+from fastapi import FastAPI
 
 try:
     from .data_pipeline import count_samples, get_eval_transforms
@@ -227,6 +229,10 @@ async def api_quality_assessment(image: UploadFile = File(...)):
 @router.post("/predict")
 async def api_predict_compat(image: UploadFile = File(...), task: str = Form("cysts"), model: str = Form("resnet50")):
     quality_result = await api_quality_assessment(image=image)
+    try:
+        image.file.seek(0)
+    except Exception:
+        pass
     diag_result = await api_diagnose(image=image, task=task, model_id=model)
     return _build_frontend_prediction_payload(diag_result, task, model, quality_result["quality_score"])
 
@@ -341,6 +347,7 @@ async def api_diagnose(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid image file: {e}")
         
+    start_time = time.time()
     if torch is None or get_eval_transforms is None or get_model is None:
         execution_time = time.time() - start_time
         brightness = float(np.mean(np.asarray(pil_img, dtype=np.float32)) / 255.0)
@@ -729,6 +736,19 @@ def api_generate_report(prediction_id: str = None):
         import traceback
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f'Failed to generate report: {e}')
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title='Ovarian Disease API')
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=['*'],
+        allow_credentials=True,
+        allow_methods=['*'],
+        allow_headers=['*'],
+    )
+    app.include_router(router, prefix='/api')
+    return app
 
 
 @router.post('/save-prediction')

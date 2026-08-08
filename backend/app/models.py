@@ -3,6 +3,17 @@ import torch.nn as nn
 import torchvision.models as models
 import numpy as np
 
+
+def _load_pretrained_model(model_builder, weights_obj):
+    try:
+        model = model_builder(weights=None)
+        state_dict = weights_obj.get_state_dict(progress=False, check_hash=False)
+        model.load_state_dict(state_dict, strict=False)
+        return model
+    except (ImportError, AttributeError, TypeError, RuntimeError):
+        return model_builder(weights=None)
+
+
 class BaseCNN(nn.Module):
     def __init__(self, num_classes: int):
         super().__init__()
@@ -42,21 +53,19 @@ class BaseCNN(nn.Module):
 
 
 class EfficientNetFeatureExtractor(nn.Module):
-    def __init__(self):
+    def __init__(self, train_backbone: bool = False):
         super().__init__()
         try:
-            from torchvision.models import EfficientNet_B0_Weights
+            model = _load_pretrained_model(models.efficientnet_b0, models.EfficientNet_B0_Weights.DEFAULT)
+        except Exception:
             model = models.efficientnet_b0(weights=None)
-        except (ImportError, AttributeError):
-            model = models.efficientnet_b0(pretrained=False)
-        
+
         self.features = model.features
         self.avgpool = model.avgpool
-        
-        # Freeze parameters
+
         for param in self.parameters():
-            param.requires_grad = False
-            
+            param.requires_grad = train_backbone
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.features(x)
         x = self.avgpool(x)
@@ -70,31 +79,31 @@ def get_model(model_name: str, num_classes: int) -> nn.Module:
     """
     if model_name == "base_cnn":
         return BaseCNN(num_classes)
-        
+
     elif model_name == "resnet50":
         try:
+            model = _load_pretrained_model(models.resnet50, models.ResNet50_Weights.DEFAULT)
+        except Exception:
             model = models.resnet50(weights=None)
-        except (ImportError, AttributeError):
-            model = models.resnet50(pretrained=False)
         model.fc = nn.Linear(model.fc.in_features, num_classes)
         return model
-        
+
     elif model_name == "densenet121":
         try:
+            model = _load_pretrained_model(models.densenet121, models.DenseNet121_Weights.DEFAULT)
+        except Exception:
             model = models.densenet121(weights=None)
-        except (ImportError, AttributeError):
-            model = models.densenet121(pretrained=False)
         model.classifier = nn.Linear(model.classifier.in_features, num_classes)
         return model
-        
+
     elif model_name == "efficientnet_b0":
         try:
+            model = _load_pretrained_model(models.efficientnet_b0, models.EfficientNet_B0_Weights.DEFAULT)
+        except Exception:
             model = models.efficientnet_b0(weights=None)
-        except (ImportError, AttributeError):
-            model = models.efficientnet_b0(pretrained=False)
         model.classifier[1] = nn.Linear(model.classifier[1].in_features, num_classes)
         return model
-        
+
     else:
         raise ValueError(f"Unknown model name: {model_name}")
 

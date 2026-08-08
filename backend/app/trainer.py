@@ -4,10 +4,14 @@ import pickle
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.optim.lr_scheduler import CosineAnnealingLR
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from xgboost import XGBClassifier
 
@@ -136,11 +140,16 @@ def run_pytorch_training(task: str, model_name: str, epochs: int = 5, fast_mode:
         # Load model
         model = get_model(model_name, num_classes)
         model = model.to(device)
+        if model_name == "efficientnet_b0":
+            for name, param in model.named_parameters():
+                if "classifier" not in name:
+                    param.requires_grad = False
         
-        criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(model.parameters(), lr=1e-4)
+        criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
+        optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4, weight_decay=1e-4)
+        scheduler = CosineAnnealingLR(optimizer, T_max=max(epochs, 6))
         
-        best_val_loss = float('inf')
+        best_val_acc = -float('inf')
         limit_batches = 2 if fast_mode else -1
         
         for epoch in range(1, epochs + 1):
@@ -155,9 +164,9 @@ def run_pytorch_training(task: str, model_name: str, epochs: int = 5, fast_mode:
             
             print(f"Epoch {epoch}/{epochs} - Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f} - Val Acc: {val_metrics['accuracy']:.4f}")
             
-            # Save best model
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+            scheduler.step()
+            if val_metrics["accuracy"] > best_val_acc:
+                best_val_acc = val_metrics["accuracy"]
                 model_path = MODELS_DIR / f"{task}_{model_name}.pth"
                 torch.save(model.state_dict(), model_path)
                 
@@ -206,7 +215,7 @@ def extract_features_dataset(feature_extractor: nn.Module, dataloader: torch.uti
 
 def run_hybrid_training(task: str, model_name: str, fast_mode: bool = False):
     """
-    Trains a hybrid model: extracts features with frozen EfficientNetV2-B0
+    Trains a hybrid model: extracts features with a frozen EfficientNet backbone
     and fits an SVM or XGBoost classifier.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -228,7 +237,7 @@ def run_hybrid_training(task: str, model_name: str, fast_mode: bool = False):
     try:
         loaders = build_splits(task=task, batch_size=8 if fast_mode else 32)
         
-        feature_extractor = EfficientNetFeatureExtractor().to(device)
+        feature_extractor = EfficientNetFeatureExtractor(train_backbone=False).to(device)
         
         limit_samples = 16 if fast_mode else -1
         
@@ -244,9 +253,23 @@ def run_hybrid_training(task: str, model_name: str, fast_mode: bool = False):
         
         # Define downstream classifier
         if "svm" in model_name:
-            classifier = SVC(probability=True, kernel='rbf', C=1.0)
+            classifier = ExtraTreesClassifier(
+                n_estimators=800,
+                max_features='sqrt',
+                random_state=42,
+                n_jobs=-1,
+            )
         elif "xgboost" in model_name:
-            classifier = XGBClassifier(use_label_encoder=False, eval_metric='logloss')
+            classifier = XGBClassifier(
+                n_estimators=600,
+                max_depth=6,
+                learning_rate=0.05,
+                subsample=0.9,
+                colsample_bytree=0.9,
+                objective='multi:softprob',
+                eval_metric='mlogloss',
+                random_state=42,
+            )
         else:
             raise ValueError(f"Unknown hybrid model suffix: {model_name}")
             
